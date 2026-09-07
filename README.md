@@ -42,3 +42,10 @@ FUTMNG/
 ## Projet
 
 FUTMNG a vocation à devenir l'interface centrale de consultation des joueurs, cartes, SBC, packs, coupes et événements du serveur MNG FUT FIFA 17.
+
+
+## Mise à jour automatique
+
+FUTMNG v1.0.1 ajoute le bouton **↻ MISE À JOUR**. Il vérifie la dernière GitHub Release du dépôt `Minegamerfrance/FUTMNG`, télécharge le ZIP de la nouvelle version, sauvegarde les fichiers remplacés puis relance l'application.
+
+Pour publier une version, attacher à la Release un ZIP nommé par exemple `FUTMNG-GitHub-v1.0.2.zip`.

@@ -1,12 +1,12 @@
 {
   "name": "FUTMNG",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "channel": "stable",
   "fifa": 17,
   "read_only": true,
   "components": {
-    "app": "1.0.0",
+    "app": "1.0.1",
     "assets": "1.0.0",
-    "updater": "0.1.0"
+    "updater": "1.0.0"
   }
 }

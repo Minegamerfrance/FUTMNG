@@ -10,6 +10,11 @@ import json
 import os
 import re
 import sys
+import tempfile
+import threading
+import subprocess
+import urllib.error
+import urllib.request
 import tkinter as tk
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,7 +22,10 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 APP_TITLE = "FUTMNG - FIFA 17 Ultimate Team Database"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
+GITHUB_OWNER = "Minegamerfrance"
+GITHUB_REPO = "FUTMNG"
+GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 
 # ----------------------------- Models -------------------------------------
 
@@ -718,8 +726,10 @@ class FUTMNGApp(tk.Tk):
         top = tk.Frame(self, bg="#101826", height=68)
         top.pack(fill="x")
         tk.Label(top, text="FUTMNG", bg="#101826", fg="#facc15", font=("Segoe UI", 20, "bold")).pack(side="left", padx=(20, 10), pady=15)
-        tk.Label(top, text="FIFA 17 • lecture seule", bg="#101826", fg="#94a3b8", font=("Segoe UI", 10)).pack(side="left", pady=20)
-        tk.Button(top, text="Choisir le serveur", command=self.choose_server, bg="#2563eb", fg="white", activebackground="#1d4ed8", relief="flat", font=("Segoe UI", 10, "bold"), padx=14, pady=7).pack(side="right", padx=20, pady=14)
+        tk.Label(top, text=f"FIFA 17 • lecture seule • v{APP_VERSION}", bg="#101826", fg="#94a3b8", font=("Segoe UI", 10)).pack(side="left", pady=20)
+        tk.Button(top, text="Choisir le serveur", command=self.choose_server, bg="#2563eb", fg="white", activebackground="#1d4ed8", relief="flat", font=("Segoe UI", 10, "bold"), padx=14, pady=7).pack(side="right", padx=(8, 20), pady=14)
+        self.update_button = tk.Button(top, text="↻  MISE À JOUR", command=self.check_for_updates, bg="#facc15", fg="#111827", activebackground="#eab308", relief="flat", font=("Segoe UI", 10, "bold"), padx=14, pady=7)
+        self.update_button.pack(side="right", padx=(8, 0), pady=14)
 
         filters = tk.Frame(self, bg="#0d1117")
         filters.pack(fill="x", padx=16, pady=(12, 8))
@@ -796,6 +806,137 @@ class FUTMNGApp(tk.Tk):
         bottom.pack(fill="x")
         self.status_var = tk.StringVar(value=f"{APP_TITLE} v{APP_VERSION}")
         tk.Label(bottom, textvariable=self.status_var, bg="#101826", fg="#94a3b8", font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=16, pady=6)
+
+    @staticmethod
+    def _version_tuple(value: str) -> Tuple[int, ...]:
+        value = (value or "0").strip().lower().lstrip("v")
+        nums = re.findall(r"\d+", value)
+        return tuple(int(x) for x in nums[:4]) or (0,)
+
+    def check_for_updates(self):
+        """Check the latest public GitHub Release without blocking the UI."""
+        if getattr(self, "_update_check_running", False):
+            return
+        self._update_check_running = True
+        self.update_button.config(text="VÉRIFICATION…", state="disabled")
+        self.status_var.set("Vérification des mises à jour FUTMNG sur GitHub…")
+
+        def worker():
+            try:
+                req = urllib.request.Request(
+                    GITHUB_LATEST_RELEASE_API,
+                    headers={
+                        "Accept": "application/vnd.github+json",
+                        "User-Agent": f"FUTMNG/{APP_VERSION}",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=12) as response:
+                    release = json.loads(response.read().decode("utf-8"))
+                self.after(0, lambda: self._handle_release_info(release))
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    msg = "Aucune Release publique n'a été trouvée. Vérifie que FUTMNG est public et qu'une Release est publiée."
+                else:
+                    msg = f"GitHub a répondu avec l'erreur HTTP {exc.code}."
+                self.after(0, lambda m=msg: self._update_error(m))
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._update_error(f"Impossible de vérifier les mises à jour.\n\n{e}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_update_check(self):
+        self._update_check_running = False
+        self.update_button.config(text="↻  MISE À JOUR", state="normal")
+
+    def _update_error(self, message: str):
+        self._finish_update_check()
+        self.status_var.set(f"FUTMNG v{APP_VERSION} • vérification GitHub impossible")
+        messagebox.showerror("Mise à jour FUTMNG", message)
+
+    def _handle_release_info(self, release: dict):
+        self._finish_update_check()
+        tag = str(release.get("tag_name") or release.get("name") or "0")
+        latest = tag.lstrip("vV")
+        if self._version_tuple(latest) <= self._version_tuple(APP_VERSION):
+            self.status_var.set(f"FUTMNG v{APP_VERSION} • à jour ✓")
+            messagebox.showinfo("Mise à jour FUTMNG", f"FUTMNG est déjà à jour.\n\nVersion installée : {APP_VERSION}\nDernière version : {latest}")
+            return
+
+        asset = None
+        for item in release.get("assets") or []:
+            name = str(item.get("name") or "")
+            lname = name.lower()
+            if lname.endswith(".zip") and (lname.startswith("futmng") or "futmng-github" in lname):
+                asset = item
+                break
+        if asset is None:
+            messagebox.showwarning(
+                "Mise à jour FUTMNG",
+                f"La version {latest} existe, mais aucun ZIP FUTMNG n'est attaché à la Release.\n\nAjoute FUTMNG-GitHub-v{latest}.zip dans les fichiers de la Release.",
+            )
+            self.status_var.set(f"Mise à jour {latest} disponible • ZIP manquant")
+            return
+
+        body = str(release.get("body") or "").strip()
+        excerpt = body[:700] + ("…" if len(body) > 700 else "")
+        prompt = f"Une nouvelle version de FUTMNG est disponible.\n\nInstallée : {APP_VERSION}\nDisponible : {latest}"
+        if excerpt:
+            prompt += f"\n\nNouveautés :\n{excerpt}"
+        prompt += "\n\nTélécharger et installer maintenant ?"
+        if messagebox.askyesno("Mise à jour FUTMNG", prompt):
+            self._download_update(asset, latest)
+        else:
+            self.status_var.set(f"FUTMNG v{APP_VERSION} • mise à jour {latest} disponible")
+
+    def _download_update(self, asset: dict, latest: str):
+        url = str(asset.get("browser_download_url") or "")
+        if not url:
+            self._update_error("Le lien de téléchargement de la Release est introuvable.")
+            return
+        self.update_button.config(text="TÉLÉCHARGEMENT…", state="disabled")
+        self.status_var.set(f"Téléchargement de FUTMNG v{latest}…")
+
+        def worker():
+            try:
+                target = Path(tempfile.gettempdir()) / f"FUTMNG-update-v{latest}.zip"
+                req = urllib.request.Request(url, headers={"User-Agent": f"FUTMNG/{APP_VERSION}"})
+                with urllib.request.urlopen(req, timeout=30) as response, target.open("wb") as out:
+                    total = int(response.headers.get("Content-Length") or 0)
+                    done = 0
+                    while True:
+                        chunk = response.read(1024 * 256)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            pct = int(done * 100 / total)
+                            self.after(0, lambda p=pct: self.status_var.set(f"Téléchargement FUTMNG v{latest} : {p}%"))
+                self.after(0, lambda: self._launch_updater(target, latest))
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._update_error(f"Le téléchargement a échoué.\n\n{e}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _launch_updater(self, zip_path: Path, latest: str):
+        self.update_button.config(text="INSTALLATION…", state="disabled")
+        install_root = Path(__file__).resolve().parent.parent
+        helper = install_root / "updater" / "futmng_updater.py"
+        if not helper.exists():
+            self._update_error(f"Le module de mise à jour est introuvable :\n{helper}")
+            return
+        python_exe = sys.executable
+        try:
+            subprocess.Popen(
+                [python_exe, str(helper), "--zip", str(zip_path), "--install-root", str(install_root), "--pid", str(os.getpid()), "--restart"],
+                cwd=str(install_root),
+                creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0),
+            )
+        except Exception as exc:
+            self._update_error(f"Impossible de lancer l'installateur.\n\n{exc}")
+            return
+        self.status_var.set(f"Installation de FUTMNG v{latest}… fermeture de l'application.")
+        self.after(300, self.destroy)
 
     def choose_server(self):
         folder = filedialog.askdirectory(title="Choisir le dossier « serveur fifa 17 »")
