@@ -1,0 +1,21 @@
+{
+  "rare_gold": "OR RARE",
+  "nonrare_gold": "OR",
+  "rare_silver": "ARGENT RARE",
+  "nonrare_silver": "ARGENT",
+  "rare_bronze": "BRONZE RARE",
+  "nonrare_bronze": "BRONZE",
+  "legend": "LÉGENDES",
+  "icon": "LÉGENDES",
+  "mng_icon": "HALL OF FAME",
+  "hall_of_fame": "HALL OF FAME",
+  "flashback": "FLASHBACK",
+  "foundation": "FONDATION",
+  "sbc": "SBC",
+  "premium_sbc": "SBC PREMIUM",
+  "otw": "OTW",
+  "totw": "TOTW",
+  "tots": "TOTS",
+  "toty": "TOTY",
+  "futmas": "FUTMAS"
+}
