@@ -1,23 +1,49 @@
 # FUTMNG
 
-**FUTMNG** est une base de données locale dédiée à **FIFA 17 Ultimate Team** et au serveur MNG FUT.
+**FUTMNG** est une base de données dédiée à **FIFA 17 Ultimate Team** et au serveur MNG FUT.
 
 ## Version actuelle
 
-`1.0.0`
+`1.0.2`
 
 ## Fonctionnalités
 
 - lecture de la base joueurs du serveur FIFA 17 ;
 - recherche par nom, Asset ID et Resource ID ;
 - filtres par type de carte ;
-- noms visuels propres : **OR RARE**, **LÉGENDES**, **HALL OF FAME**, **FLASHBACK**, etc. ;
+- noms visuels : **OR RARE**, **LÉGENDES**, **HALL OF FAME**, **FLASHBACK**, etc. ;
 - aperçu du joueur et de ses statistiques ;
-- détection **PACKABLE** ;
-- détection des récompenses **SBC** ;
-- détection des récompenses de **COUPE** ;
-- statut marché / exclusif ;
-- application actuellement en **lecture seule** afin de ne pas modifier le serveur.
+- détection **PACKABLE**, **SBC**, **COUPE**, marché et exclusif ;
+- mise à jour automatique de FUTMNG via les Releases GitHub ;
+- chargement des heads **à la demande** depuis `assets/heads` sur GitHub ;
+- prise en charge des fichiers Frosty `p<ID>.png` et `p<ID>.dds` ;
+- cache local : une head déjà consultée n'est pas retéléchargée ;
+- application en lecture seule vis-à-vis du serveur FIFA 17.
+
+## Heads à la demande
+
+FUTMNG ne télécharge pas toutes les images à l'installation. Quand un joueur est sélectionné, FUTMNG cherche en priorité :
+
+```text
+p<assetId>.png
+p<assetId>.dds
+p<resourceId>.png
+p<resourceId>.dds
+```
+
+Si le fichier n'est pas déjà présent localement, il est récupéré depuis :
+
+```text
+Minegamerfrance/FUTMNG → assets/heads/
+```
+
+puis enregistré dans :
+
+```text
+cache/heads/
+```
+
+Le téléchargement se fait en arrière-plan. Les DDS sont affichés grâce à Pillow, installé automatiquement au premier lancement si nécessaire.
 
 ## Lancer FUTMNG
 
@@ -25,27 +51,19 @@ Sous Windows, double-clique sur :
 
 `OUVRIR FUTMNG.bat`
 
-FUTMNG essaye de détecter automatiquement le dossier `serveur fifa 17`. Si le serveur n'est pas détecté, utilise le bouton **Choisir le serveur**.
+FUTMNG essaye de détecter automatiquement le dossier `serveur fifa 17`. Si le serveur n'est pas détecté, utilise **Choisir le serveur**.
 
-## Structure du dépôt
+## Structure
 
 ```text
 FUTMNG/
-├── app/                 # application principale
-├── assets/              # ressources visuelles / cache
-├── config/              # configuration FUTMNG
-├── updater/             # futur système de mise à jour
-├── version.json         # version installée
-└── OUVRIR FUTMNG.bat    # lancement Windows
+├── app/
+├── assets/
+│   └── heads/          # heads GitHub p<ID>.png / p<ID>.dds
+├── cache/
+│   └── heads/          # créé automatiquement chez l'utilisateur
+├── config/
+├── updater/
+├── version.json
+└── OUVRIR FUTMNG.bat
 ```
-
-## Projet
-
-FUTMNG a vocation à devenir l'interface centrale de consultation des joueurs, cartes, SBC, packs, coupes et événements du serveur MNG FUT FIFA 17.
-
-
-## Mise à jour automatique
-
-FUTMNG v1.0.1 ajoute le bouton **↻ MISE À JOUR**. Il vérifie la dernière GitHub Release du dépôt `Minegamerfrance/FUTMNG`, télécharge le ZIP de la nouvelle version, sauvegarde les fichiers remplacés puis relance l'application.
-
-Pour publier une version, attacher à la Release un ZIP nommé par exemple `FUTMNG-GitHub-v1.0.2.zip`.

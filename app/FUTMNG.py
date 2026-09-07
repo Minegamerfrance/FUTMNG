@@ -16,16 +16,25 @@ import subprocess
 import urllib.error
 import urllib.request
 import tkinter as tk
+
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except Exception:
+    Image = None
+    ImageTk = None
+    PIL_AVAILABLE = False
 from dataclasses import dataclass, field
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 APP_TITLE = "FUTMNG - FIFA 17 Ultimate Team Database"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 GITHUB_OWNER = "Minegamerfrance"
 GITHUB_REPO = "FUTMNG"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+GITHUB_RAW_HEADS_BASE = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{GITHUB_REPO}/main/assets/heads"
 
 # ----------------------------- Models -------------------------------------
 
@@ -701,6 +710,8 @@ class FUTMNGApp(tk.Tk):
         self.filtered: List[Card] = []
         self.current_card: Optional[Card] = None
         self.current_photo = None
+        self._head_loading: Set[int] = set()
+        self._head_missing: Set[int] = set()
 
         self._setup_style()
         self._build_ui()
@@ -806,6 +817,138 @@ class FUTMNGApp(tk.Tk):
         bottom.pack(fill="x")
         self.status_var = tk.StringVar(value=f"{APP_TITLE} v{APP_VERSION}")
         tk.Label(bottom, textvariable=self.status_var, bg="#101826", fg="#94a3b8", font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=16, pady=6)
+
+    def _install_root(self) -> Path:
+        return Path(__file__).resolve().parent.parent
+
+    def _head_candidates(self, card: Card) -> List[str]:
+        """Return Frosty-style p<ID> file names. Asset ID is preferred for special cards."""
+        ids: List[int] = []
+        for value in (card.asset_id, card.resource_id):
+            try:
+                value = int(value)
+            except Exception:
+                continue
+            if value > 0 and value not in ids:
+                ids.append(value)
+        names: List[str] = []
+        for value in ids:
+            for ext in ("png", "dds", "PNG", "DDS"):
+                names.append(f"p{value}.{ext}")
+        return names
+
+    def _local_head_path(self, card: Card) -> Optional[Path]:
+        """Look in FUTMNG assets/cache first, then in the server's historical image cache."""
+        root = self._install_root()
+        dirs = [root / "assets" / "heads", root / "cache" / "heads"]
+        for directory in dirs:
+            for name in self._head_candidates(card):
+                path = directory / name
+                if path.exists() and path.is_file():
+                    return path
+        if self.db:
+            server_img = self.db.image_path(card)
+            if server_img and server_img.exists():
+                return server_img
+        return None
+
+    def _display_head(self, path: Path) -> bool:
+        """Display PNG or DDS. Pillow is used when available, which adds DDS support."""
+        try:
+            if PIL_AVAILABLE:
+                with Image.open(path) as im:
+                    im = im.convert("RGBA")
+                    im.thumbnail((256, 256), Image.Resampling.LANCZOS)
+                    canvas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+                    x = (256 - im.width) // 2
+                    y = (256 - im.height) // 2
+                    canvas.alpha_composite(im, (x, y))
+                    photo = ImageTk.PhotoImage(canvas)
+            else:
+                if path.suffix.lower() != ".png":
+                    return False
+                photo = tk.PhotoImage(file=str(path))
+                # Keep older 128x128 server cache readable without Pillow.
+                if photo.width() <= 160 and photo.height() <= 160:
+                    photo = photo.zoom(2, 2)
+            self.current_photo = photo
+            self.portrait_label.config(image=photo, text="", width=256, height=256)
+            return True
+        except Exception:
+            return False
+
+    def _download_head_async(self, card: Card) -> None:
+        """Download only the selected player's head from GitHub and cache it locally."""
+        rid = int(card.resource_id)
+        if rid in self._head_loading or rid in self._head_missing:
+            return
+        self._head_loading.add(rid)
+        self.portrait_label.config(image="", text="CHARGEMENT\nDU VISAGE…", width=22, height=11)
+        self.status_var.set(f"Téléchargement du visage de {card.name} en arrière-plan…")
+
+        names = self._head_candidates(card)
+        cache_dir = self._install_root() / "cache" / "heads"
+
+        def worker():
+            found: Optional[Path] = None
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                for name in names:
+                    url = f"{GITHUB_RAW_HEADS_BASE}/{name}"
+                    req = urllib.request.Request(url, headers={"User-Agent": f"FUTMNG/{APP_VERSION}"})
+                    try:
+                        with urllib.request.urlopen(req, timeout=12) as response:
+                            data = response.read()
+                        if not data:
+                            continue
+                        target = cache_dir / name
+                        target.write_bytes(data)
+                        found = target
+                        break
+                    except urllib.error.HTTPError as exc:
+                        if exc.code == 404:
+                            continue
+                        raise
+                self.after(0, lambda p=found, c=card: self._finish_head_download(c, p))
+            except Exception as exc:
+                self.after(0, lambda c=card, e=exc: self._finish_head_download(c, None, e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_head_download(self, card: Card, path: Optional[Path], error: Optional[Exception] = None) -> None:
+        rid = int(card.resource_id)
+        self._head_loading.discard(rid)
+        # Do not replace the preview if the user selected another player meanwhile.
+        if not self.current_card or int(self.current_card.resource_id) != rid:
+            return
+        if path and self._display_head(path):
+            self.status_var.set(f"Visage de {card.name} chargé depuis GitHub et mis en cache ✓")
+            self._render_badges(card, self.db.acquisition(card), True)
+            return
+        self._head_missing.add(rid)
+        if error:
+            self.portrait_label.config(image="", text="IMAGE\nINDISPONIBLE", width=22, height=11)
+            self.status_var.set(f"Impossible de charger le visage de {card.name} depuis GitHub")
+        else:
+            self.portrait_label.config(image="", text="AUCUN VISAGE\nSUR GITHUB", width=22, height=11)
+            self.status_var.set(f"Aucun fichier p<ID>.png/.dds trouvé pour {card.name}")
+        self._render_badges(card, self.db.acquisition(card), False)
+
+    def _render_badges(self, card: Card, acq: Acquisition, has_image: bool) -> None:
+        for child in self.badges_frame.winfo_children():
+            child.destroy()
+        badges = [
+            ("PACKABLE", acq.packable, "#16a34a"),
+            ("SBC DIRECT", acq.sbc_direct, "#7c3aed"),
+            ("COUPE", acq.cup_reward, "#ea580c"),
+            ("MARCHÉ", acq.marketable, "#2563eb"),
+            ("EXCLUSIF", acq.exclusive, "#dc2626"),
+            ("IMAGE", has_image, "#0891b2"),
+        ]
+        for text, enabled, color in badges:
+            bg = color if enabled else "#1f2937"
+            fg = "white" if enabled else "#64748b"
+            tk.Label(self.badges_frame, text=text, bg=bg, fg=fg, font=("Segoe UI", 9, "bold"), padx=9, pady=5).pack(side="left", padx=(0, 6))
 
     @staticmethod
     def _version_tuple(value: str) -> Tuple[int, ...]:
@@ -1027,33 +1170,12 @@ class FUTMNGApp(tk.Tk):
         self.stats_label.config(text="\n".join(f"{lab:<3}  {attrs[i] if i < len(attrs) else '--':>3}" for i, lab in enumerate(labels)))
 
         self.current_photo = None
-        img = self.db.image_path(card)
-        if img:
-            try:
-                photo = tk.PhotoImage(file=str(img))
-                # 128x128 cache -> 256x256 preview.
-                photo = photo.zoom(2, 2)
-                self.current_photo = photo
-                self.portrait_label.config(image=photo, text="", width=256, height=256)
-            except Exception:
-                self.portrait_label.config(image="", text="IMAGE\nILLISIBLE", width=22, height=11)
-        else:
-            self.portrait_label.config(image="", text="PORTRAIT SERVEUR\nNON DISPONIBLE", width=22, height=11)
-
-        for child in self.badges_frame.winfo_children():
-            child.destroy()
-        badges = [
-            ("PACKABLE", acq.packable, "#16a34a"),
-            ("SBC DIRECT", acq.sbc_direct, "#7c3aed"),
-            ("COUPE", acq.cup_reward, "#ea580c"),
-            ("MARCHÉ", acq.marketable, "#2563eb"),
-            ("EXCLUSIF", acq.exclusive, "#dc2626"),
-            ("IMAGE", img is not None, "#0891b2"),
-        ]
-        for text, enabled, color in badges:
-            bg = color if enabled else "#1f2937"
-            fg = "white" if enabled else "#64748b"
-            tk.Label(self.badges_frame, text=text, bg=bg, fg=fg, font=("Segoe UI", 9, "bold"), padx=9, pady=5).pack(side="left", padx=(0, 6))
+        img = self._local_head_path(card)
+        image_ok = bool(img and self._display_head(img))
+        if not image_ok:
+            self.portrait_label.config(image="", text="CHARGEMENT\nDU VISAGE…", width=22, height=11)
+            self._download_head_async(card)
+        self._render_badges(card, acq, image_ok)
 
         lines = [
             f"Qualité : {friendly_quality(card)}    Type : {friendly_card_type(card)}    Version : {card.version}    Rare flag : {card.rare_flag}",
