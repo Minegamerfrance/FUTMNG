@@ -30,7 +30,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 APP_TITLE = "FUTMNG - FIFA 17 Ultimate Team Database"
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 GITHUB_OWNER = "Minegamerfrance"
 GITHUB_REPO = "FUTMNG"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
@@ -821,10 +821,17 @@ class FUTMNGApp(tk.Tk):
     def _install_root(self) -> Path:
         return Path(__file__).resolve().parent.parent
 
-    def _head_candidates(self, card: Card) -> List[str]:
-        """Return Frosty-style p<ID> file names. Asset ID is preferred for special cards."""
+    def _head_candidates(self, card: Card, resource_only: bool = False) -> List[str]:
+        """Return Frosty-style p<ID> names.
+
+        Resource ID is always checked first. This is essential for special cards:
+        several versions of the same player share the same assetId, while the
+        resourceId identifies the exact card/dynamic image. Asset ID remains a
+        fallback when no card-specific image exists.
+        """
         ids: List[int] = []
-        for value in (card.asset_id, card.resource_id):
+        values = (card.resource_id,) if resource_only else (card.resource_id, card.asset_id)
+        for value in values:
             try:
                 value = int(value)
             except Exception:
@@ -836,6 +843,15 @@ class FUTMNGApp(tk.Tk):
             for ext in ("png", "dds", "PNG", "DDS"):
                 names.append(f"p{value}.{ext}")
         return names
+
+    def _is_resource_head(self, card: Card, path: Optional[Path]) -> bool:
+        """True when the selected file belongs to the exact resource/card ID."""
+        if not path:
+            return False
+        try:
+            return path.stem.lower() == f"p{int(card.resource_id)}".lower()
+        except Exception:
+            return False
 
     def _local_head_path(self, card: Card) -> Optional[Path]:
         """Look in FUTMNG assets/cache first, then in the server's historical image cache."""
@@ -877,16 +893,26 @@ class FUTMNGApp(tk.Tk):
         except Exception:
             return False
 
-    def _download_head_async(self, card: Card) -> None:
-        """Download only the selected player's head from GitHub and cache it locally."""
-        rid = int(card.resource_id)
-        if rid in self._head_loading or rid in self._head_missing:
-            return
-        self._head_loading.add(rid)
-        self.portrait_label.config(image="", text="CHARGEMENT\nDU VISAGE…", width=22, height=11)
-        self.status_var.set(f"Téléchargement du visage de {card.name} en arrière-plan…")
+    def _download_head_async(self, card: Card, resource_only: bool = False, keep_current: bool = False) -> None:
+        """Download only the selected player's image from GitHub and cache it locally.
 
-        names = self._head_candidates(card)
+        For a special card, ``resource_only`` lets FUTMNG look for the dynamic
+        image without replacing a usable base portrait while the request runs.
+        """
+        rid = int(card.resource_id)
+        loading_key = (rid, bool(resource_only))
+        missing_key = (rid, bool(resource_only))
+        if loading_key in self._head_loading or missing_key in self._head_missing:
+            return
+        self._head_loading.add(loading_key)
+        if not keep_current:
+            self.portrait_label.config(image="", text="CHARGEMENT\nDU VISAGE…", width=22, height=11)
+        if resource_only:
+            self.status_var.set(f"Recherche de l'image spéciale de {card.name} sur GitHub…")
+        else:
+            self.status_var.set(f"Téléchargement du visage de {card.name} en arrière-plan…")
+
+        names = self._head_candidates(card, resource_only=resource_only)
         cache_dir = self._install_root() / "cache" / "heads"
 
         def worker():
@@ -909,24 +935,27 @@ class FUTMNGApp(tk.Tk):
                         if exc.code == 404:
                             continue
                         raise
-                self.after(0, lambda p=found, c=card: self._finish_head_download(c, p))
+                self.after(0, lambda p=found, c=card, ro=resource_only: self._finish_head_download(c, p, resource_only=ro))
             except Exception as exc:
-                self.after(0, lambda c=card, e=exc: self._finish_head_download(c, None, e))
+                self.after(0, lambda c=card, e=exc, ro=resource_only: self._finish_head_download(c, None, e, resource_only=ro))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_head_download(self, card: Card, path: Optional[Path], error: Optional[Exception] = None) -> None:
+    def _finish_head_download(self, card: Card, path: Optional[Path], error: Optional[Exception] = None, resource_only: bool = False) -> None:
         rid = int(card.resource_id)
-        self._head_loading.discard(rid)
+        key = (rid, bool(resource_only))
+        self._head_loading.discard(key)
         # Do not replace the preview if the user selected another player meanwhile.
         if not self.current_card or int(self.current_card.resource_id) != rid:
             return
         if path and self._display_head(path):
-            self.status_var.set(f"Visage de {card.name} chargé depuis GitHub et mis en cache ✓")
+            label = "Image spéciale" if resource_only else "Visage"
+            self.status_var.set(f"{label} de {card.name} chargée depuis GitHub et mise en cache ✓")
             self._render_badges(card, self.db.acquisition(card), True)
             return
-        self._head_missing.add(rid)
-        if error:
+        self._head_missing.add(key)
+        # A failed special-image lookup must not erase a base portrait already shown.
+        if error and not resource_only:
             self.portrait_label.config(image="", text="IMAGE\nINDISPONIBLE", width=22, height=11)
             self.status_var.set(f"Impossible de charger le visage de {card.name} depuis GitHub")
         else:
@@ -1172,7 +1201,15 @@ class FUTMNGApp(tk.Tk):
         self.current_photo = None
         img = self._local_head_path(card)
         image_ok = bool(img and self._display_head(img))
-        if not image_ok:
+
+        # Special cards can share the player's assetId. If only the base portrait
+        # is available locally, show it as a temporary fallback but continue in
+        # the background looking for p<resourceId>.png/.dds on GitHub.
+        exact_resource_image = self._is_resource_head(card, img)
+        is_special_resource = int(card.resource_id or 0) != int(card.asset_id or 0)
+        if image_ok and is_special_resource and not exact_resource_image:
+            self._download_head_async(card, resource_only=True, keep_current=True)
+        elif not image_ok:
             self.portrait_label.config(image="", text="CHARGEMENT\nDU VISAGE…", width=22, height=11)
             self._download_head_async(card)
         self._render_badges(card, acq, image_ok)

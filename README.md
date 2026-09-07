@@ -67,3 +67,9 @@ FUTMNG/
 ├── version.json
 └── OUVRIR FUTMNG.bat
 ```
+
+
+## v1.0.3 — images des cartes spéciales
+- `p<resourceId>.png/.dds` est recherché avant `p<assetId>.png/.dds`.
+- Si une carte spéciale utilise encore le portrait de base en cache, FUTMNG le montre provisoirement puis cherche automatiquement son image spéciale sur GitHub.
+- Il n’est plus nécessaire de supprimer manuellement le cache après l’ajout d’une nouvelle image spéciale, à condition de relancer FUTMNG si cette image avait déjà été marquée absente pendant la session.
